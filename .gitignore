@@ -219,3 +219,6 @@ __marimo__/
 
 # Local test outputs
 artifacts/
+
+# Local git worktrees
+.worktrees/
