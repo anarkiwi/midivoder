@@ -25,6 +25,7 @@ class Frame:
     )  # (hz, linear amp), loudest first
     energy: float = 0.0  # linear RMS energy
     voiced: bool = False
+    silent: bool = False  # below the silence gate; spectral fields not computed
     centroid: float = 0.0  # spectral centroid (Hz)
     flatness: float = 1.0  # spectral flatness 0..1
     flux: float = 0.0  # positive spectral flux vs prev frame
@@ -75,6 +76,7 @@ def analyze(signal: np.ndarray, cfg: EncodeConfig) -> list[Frame]:
         )
 
         if rms < global_peak * 10.0 ** (_SILENCE_DB / 20.0):
+            fr.silent = True
             frames.append(fr)
             continue
 
