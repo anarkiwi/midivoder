@@ -23,6 +23,20 @@ midivoder profile-instruments
 
 `midivoder encode --help` lists all analysis and MIDI options.
 
+## Example
+
+Speak a phrase with `espeak-ng`, encode it, and render the MIDI back to audio:
+
+```
+espeak-ng -w hello.wav "hello, I am a vocoder"
+midivoder encode hello.wav -o hello.mid
+midivoder render hello.mid -o hello_rendered.wav --sample-rate 22050
+```
+
+| Input voice | MIDI | Rendered (FluidR3 GM) |
+| --- | --- | --- |
+| [hello.wav](docs/examples/hello.wav) | [hello.mid](docs/examples/hello.mid) | [hello_rendered.wav](docs/examples/hello_rendered.wav) |
+
 ## Tests
 
 Tests (including the end-to-end espeak → MIDI → fluidsynth fidelity check) run in Docker:
