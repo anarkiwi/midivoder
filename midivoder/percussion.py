@@ -53,7 +53,7 @@ def extract_percussion(frames: list[Frame], cfg: EncodeConfig) -> list[PercEvent
     events: list[PercEvent] = []
     last_time = -1e9
     for i, fr in enumerate(frames):
-        if fr.voiced or fr.energy < onset_lin:
+        if fr.silent or fr.voiced or fr.energy < onset_lin:
             continue
         is_onset = fr.flux >= flux_thresh and (i == 0 or fr.flux >= fluxes[i - 1])
         if not (is_onset or fr.time - last_time >= min_interval):
