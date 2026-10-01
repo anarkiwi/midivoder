@@ -5,11 +5,12 @@ from __future__ import annotations
 import numpy as np
 import mido
 
-from midivoder.config import PERCUSSION_CHANNEL, EncodeConfig
+from midivoder.config import CR2_MAX_PITCH, PERCUSSION_CHANNEL, EncodeConfig
 from midivoder.partials import Partial
 from midivoder.percussion import PercEvent
 
-_DYNAMIC_RANGE_DB = 48.0  # amplitude window mapped onto velocity
+_DYNAMIC_RANGE_DB = 48.0  # amplitude window below ref_amp that stays audible
+_AMP_FLOOR = 10.0 ** (-_DYNAMIC_RANGE_DB / 20.0)
 
 # Event ordering at a shared tick: frees and setup must precede note-ons.
 _PRIO_OFF = 0
@@ -39,8 +40,8 @@ def midi_float(freq: float) -> float:
 
 
 def nearest_note(freq: float, cfg: EncodeConfig) -> int:
-    """Nearest MIDI note to `freq`, clamped to the configured note range."""
-    return int(np.clip(round(midi_float(freq)), cfg.note_min, cfg.note_max))
+    """Nearest MIDI note to `freq`, clamped to the synth's playable note range."""
+    return int(np.clip(round(midi_float(freq)), cfg.note_min, cfg.note_ceiling))
 
 
 def bend_value(midf: float, base_note: int, bend_range: float) -> int:
@@ -49,20 +50,30 @@ def bend_value(midf: float, base_note: int, bend_range: float) -> int:
     return int(np.clip(round(semis / bend_range * 8192.0), -8192, 8191))
 
 
-def _amp_unit(amp: float, ref: float) -> float:
-    db = 20.0 * np.log10(amp / ref + 1e-12)
-    return float(np.clip((db + _DYNAMIC_RANGE_DB) / _DYNAMIC_RANGE_DB, 0.0, 1.0))
+def amp_ratio(amp: float, ref: float) -> float:
+    """Amplitude relative to `ref`, clipped to the dynamic-range window."""
+    return float(np.clip(amp / ref, _AMP_FLOOR, 1.0))
 
 
 def amp_to_velocity(amp: float, ref: float, cfg: EncodeConfig) -> int:
-    """Map amplitude relative to `ref` onto the configured velocity range."""
-    u = _amp_unit(amp, ref)
-    return int(round(cfg.velocity_min + u * (cfg.velocity_max - cfg.velocity_min)))
+    """Note-on velocity (1-127) whose rendered level is `amp / ref` on the target synth.
+
+    SF2 (GM) attenuates by 40*log10(v/127) dB, so v = 127*sqrt(a); CR2 scales pulse
+    width linearly by v/127.
+    """
+    a = amp_ratio(amp, ref)
+    return max(1, int(round(127.0 * (a if cfg.synth == "cr2" else np.sqrt(a)))))
 
 
-def amp_to_volume(amp: float, ref: float) -> int:
-    """Channel-volume (CC7) value, 0-127, tracking the amplitude contour of one partial."""
-    return int(round(_amp_unit(amp, ref) * 127.0))
+def cr2_hz_scale(note: int) -> float:
+    """CR2's pitch-dependent pulse-width factor for base note `note` (0 at its top pitch)."""
+    return max(0.0, 1.0 - 2.0 ** ((note - CR2_MAX_PITCH) / 12.0))
+
+
+def amp_to_volume(amp: float, ref: float, note: int) -> int:
+    """CR2 CC7 (0-127) giving level `amp / ref` on `note` at full velocity."""
+    a = amp_ratio(amp, ref)
+    return int(round(127.0 * a / max(cr2_hz_scale(note), a)))
 
 
 def _assign_channels(partials: list[Partial], cfg: EncodeConfig) -> dict[int, int]:
@@ -185,9 +196,9 @@ def _emit_partial(
                 ),
             )
             if cc7_amp:
-                last_vol = amp_to_volume(aa, ref_amp)
+                last_vol = amp_to_volume(aa, ref_amp, base_note)
                 add(ch, tick, _PRIO_CTRL, _cc(ch, _CR2_CC_VOLUME, last_vol))
-                velocity = cfg.velocity_max
+                velocity = 127
             else:
                 velocity = amp_to_velocity(aa, ref_amp, cfg)
             add(
@@ -210,7 +221,7 @@ def _emit_partial(
                 ),
             )
             if cc7_amp:
-                vol = amp_to_volume(aa, ref_amp)
+                vol = amp_to_volume(aa, ref_amp, base_note)
                 if vol != last_vol:
                     add(ch, tick, _PRIO_CTRL, _cc(ch, _CR2_CC_VOLUME, vol))
                     last_vol = vol
@@ -240,11 +251,12 @@ def _emit_percussion(add, perc_events: list[PercEvent], cfg: EncodeConfig) -> No
     for ev in perc_events:
         on = cfg.time_to_ticks(ev.time)
         note = nearest_note(ev.centroid, cfg) if cr2 else ev.note
+        velocity = amp_to_velocity(ev.amp, 1.0, cfg)
         add(
             ch,
             on,
             _PRIO_ON,
-            mido.Message("note_on", channel=ch, note=note, velocity=ev.velocity),
+            mido.Message("note_on", channel=ch, note=note, velocity=velocity),
         )
         add(
             ch,

@@ -89,7 +89,9 @@ def analyze(signal: np.ndarray, cfg: EncodeConfig) -> list[Frame]:
         zcr = float(np.mean(np.abs(np.diff(np.sign(seg))) > 0))
         fr.voiced = fr.flatness < _VOICED_FLATNESS_MAX and zcr < _VOICED_ZCR_MAX
 
-        fr.peaks = _pick_peaks(mag, freqs, band, floor_lin, cfg.max_peaks_per_frame)
+        fr.peaks = _pick_peaks(
+            mag, freqs, band, floor_lin, cfg.max_peaks_per_frame, cfg.partial_fmax
+        )
         frames.append(fr)
 
     return frames
@@ -101,8 +103,9 @@ def _pick_peaks(
     band: np.ndarray,
     floor_lin: float,
     max_peaks: int,
+    fmax: float,
 ) -> list[tuple[float, float]]:
-    """Local maxima with parabolic interpolation for sub-bin freq/amplitude."""
+    """Local maxima below `fmax`, parabolically interpolated for sub-bin freq/amplitude."""
     df = freqs[1] - freqs[0]
     thresh = max(float(mag.max()) * floor_lin, 1e-9)
     lo = int(np.argmax(band))
@@ -122,6 +125,8 @@ def _pick_peaks(
         p = 0.5 * (a - c) / denom if denom != 0 else 0.0
         p = float(np.clip(p, -0.5, 0.5))
         freq = (k + p) * df
+        if freq >= fmax:
+            continue
         amp = float(np.exp(b - 0.25 * (a - c) * p))
         peaks.append((freq, amp))
 

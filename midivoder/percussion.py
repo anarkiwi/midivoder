@@ -24,7 +24,7 @@ class PercEvent:
 
     time: float
     note: int  # GM drum note (used by the "gm" synth target)
-    velocity: int
+    amp: float  # frame energy relative to the loudest frame (amplitude ratio)
     centroid: float  # spectral centroid (Hz); the "cr2" target centers its noise here
 
 
@@ -60,16 +60,11 @@ def extract_percussion(frames: list[Frame], cfg: EncodeConfig) -> list[PercEvent
             continue
         if fr.time - last_time < min_interval and not is_onset:
             continue
-        scale = 20.0 * np.log10(fr.energy / peak_energy + 1e-12) - cfg.perc_onset_db
-        scale = float(np.clip(scale / (-cfg.perc_onset_db), 0.0, 1.0))
-        vel = int(
-            round(cfg.velocity_min + scale * (cfg.velocity_max - cfg.velocity_min))
-        )
         events.append(
             PercEvent(
                 time=fr.time,
                 note=_note_for_centroid(fr.centroid),
-                velocity=vel,
+                amp=fr.energy / peak_energy,
                 centroid=fr.centroid,
             )
         )
