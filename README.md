@@ -23,6 +23,17 @@ midivoder profile-instruments
 
 `midivoder encode --help` lists all analysis and MIDI options.
 
+## Intelligibility tools
+
+Install with `pip install .[eval]` or build the Docker `eval` target
+(`docker build --target eval -t midivoder-eval .`).
+
+```
+python3 tools/intelligibility.py render voice.mid voice_sine.wav --synth gm|cr2  # ideal-sine render under the synth's pitch and level laws
+python3 tools/intelligibility.py wer words.txt a.wav [b.wav ...]                 # faster-whisper word error rate vs reference text
+python3 tools/intelligibility.py stoi voice.wav a.wav [b.wav ...]                # STOI vs the source voice WAV
+```
+
 ## Example
 
 Speak a phrase with `espeak-ng`, encode it, and render the MIDI back to audio:

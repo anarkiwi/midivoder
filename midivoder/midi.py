@@ -5,7 +5,12 @@ from __future__ import annotations
 import numpy as np
 import mido
 
-from midivoder.config import CR2_MAX_PITCH, PERCUSSION_CHANNEL, EncodeConfig
+from midivoder.config import (
+    CR2_CONTROL_TICK_S,
+    CR2_MAX_PITCH,
+    PERCUSSION_CHANNEL,
+    EncodeConfig,
+)
 from midivoder.partials import Partial
 from midivoder.percussion import PercEvent
 
@@ -20,15 +25,15 @@ _PRIO_ON = 3
 
 # CHIME RED II control changes (see ../chime_red2/MIDI.md). CR2 ignores RPN, so the
 # pitch-bend range is set with CC31 instead; ADSR is CC73/75/24/72 (each 0-127 -> 0-4s).
-_CR2_CC_RESET = 121
-_CR2_CC_VOLUME = 7
-_CR2_CC_BEND_RANGE = 31
-_CR2_CC_ATTACK = 73
-_CR2_CC_DECAY = 75
-_CR2_CC_SUSTAIN = 24
-_CR2_CC_RELEASE = 72
-# A short release (~0.1s) keeps tonal note-offs from clicking without leaving a tail.
-_CR2_TONAL_RELEASE = 3
+CR2_CC_RESET = 121
+CR2_CC_VOLUME = 7
+CR2_CC_BEND_RANGE = 31
+CR2_CC_ATTACK = 73
+CR2_CC_DECAY = 75
+CR2_CC_SUSTAIN = 24
+CR2_CC_RELEASE = 72
+# A short release (AdsrCurveMs[3] = 3 ms) keeps tonal note-offs from clicking.
+CR2_TONAL_RELEASE = 3
 # Percussive noise burst: instant attack, decay to silence, short release.
 _CR2_NOISE_DECAY = 10
 _CR2_NOISE_RELEASE = 4
@@ -65,9 +70,61 @@ def amp_to_velocity(amp: float, ref: float, cfg: EncodeConfig) -> int:
     return max(1, int(round(127.0 * (a if cfg.synth == "cr2" else np.sqrt(a)))))
 
 
+def note_scale(note, synth: str):
+    """Pitch-dependent level factor of `note` (CR2 pulse-width hzScale, 1 on GM)."""
+    note = np.asarray(note, dtype=float)
+    if synth != "cr2":
+        return np.ones_like(note)
+    return np.maximum(0.0, 1.0 - 2.0 ** ((note - CR2_MAX_PITCH) / 12.0))
+
+
 def cr2_hz_scale(note: int) -> float:
     """CR2's pitch-dependent pulse-width factor for base note `note` (0 at its top pitch)."""
-    return max(0.0, 1.0 - 2.0 ** ((note - CR2_MAX_PITCH) / 12.0))
+    return float(note_scale(note, "cr2"))
+
+
+def value_gain(value, synth: str):
+    """Linear amplitude factor of a velocity or CC7 `value` (SF2 squares it, CR2 is linear)."""
+    g = np.asarray(value, dtype=float) / 127.0
+    return g if synth == "cr2" else g * g
+
+
+def rendered_level(velocity, volume, note, synth: str):
+    """Amplitude a note renders at, relative to full velocity, full CC7 and unit scale."""
+    return (
+        value_gain(velocity, synth)
+        * value_gain(volume, synth)
+        * note_scale(note, synth)
+    )
+
+
+def synth_bend_semitones(value, bend_range: float, synth: str):
+    """Pitch offset in semitones that a 14-bit bend `value` produces.
+
+    GM bends linearly in semitones. CR2 interpolates linearly in period between the note
+    and the note `bend_range` semitones away (PitchBender::BendHz).
+    """
+    frac = np.asarray(value, dtype=float) / 8192.0
+    if synth != "cr2":
+        return frac * bend_range
+    span = 2.0 ** (-np.sign(frac) * bend_range / 12.0) - 1.0
+    return -12.0 * np.log2(1.0 + np.abs(frac) * span)
+
+
+def cr2_release_ms(release_cc: int) -> float:
+    """CR2 ADSR release time for CC72 `release_cc` (AdsrCurveMs: i + (i^4 >> 16))."""
+    return float(release_cc + (release_cc**4 >> 16))
+
+
+def cr2_expiry_s(release_cc: int = CR2_TONAL_RELEASE) -> float:
+    """Seconds from a CR2 note-off until that note can be re-struck at a new velocity.
+
+    A held or releasing note is only re-enveloped by a note-on (velocity kept); ExpireNotes
+    frees it on the control cycle its release reaches idle, ceil(release / tick) cycles on.
+    One more cycle covers a note-off that lands mid-cycle.
+    """
+    cycles = np.floor(cr2_release_ms(release_cc) / 1000.0 / CR2_CONTROL_TICK_S) + 2
+    return float(cycles * CR2_CONTROL_TICK_S)
 
 
 def amp_to_volume(amp: float, ref: float, note: int) -> int:
@@ -135,10 +192,10 @@ def _setup_tonal_channel(add, ch: int, program: int, cfg: EncodeConfig) -> None:
         # CR2: reset first (clears CCs to defaults), then volume + CC31 bend range. The
         # default ADSR (instant attack, full sustain, zero release) already suits sustained
         # speech partials; add only a short release so note-offs don't click.
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_RESET, 0))
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_VOLUME, 127))
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_BEND_RANGE, bend))
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_RELEASE, _CR2_TONAL_RELEASE))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_RESET, 0))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_VOLUME, 127))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_BEND_RANGE, bend))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_RELEASE, CR2_TONAL_RELEASE))
         return
     add(ch, 0, _PRIO_SETUP, mido.Message("program_change", channel=ch, program=program))
     add(ch, 0, _PRIO_SETUP, _cc(ch, 7, 127))
@@ -197,7 +254,7 @@ def _emit_partial(
             )
             if cc7_amp:
                 last_vol = amp_to_volume(aa, ref_amp, base_note)
-                add(ch, tick, _PRIO_CTRL, _cc(ch, _CR2_CC_VOLUME, last_vol))
+                add(ch, tick, _PRIO_CTRL, _cc(ch, CR2_CC_VOLUME, last_vol))
                 velocity = 127
             else:
                 velocity = amp_to_velocity(aa, ref_amp, cfg)
@@ -223,7 +280,7 @@ def _emit_partial(
             if cc7_amp:
                 vol = amp_to_volume(aa, ref_amp, base_note)
                 if vol != last_vol:
-                    add(ch, tick, _PRIO_CTRL, _cc(ch, _CR2_CC_VOLUME, vol))
+                    add(ch, tick, _PRIO_CTRL, _cc(ch, CR2_CC_VOLUME, vol))
                     last_vol = vol
     if open_note is not None:
         add(
@@ -242,12 +299,12 @@ def _emit_percussion(add, perc_events: list[PercEvent], cfg: EncodeConfig) -> No
         # CR2 channel 10 is a pitched-noise voice: the note pitch sets the noise band
         # center, so map the spectral centroid to a note (bright fricatives -> high noise,
         # plosives -> low thud). Shape each hit with a percussive ADSR.
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_RESET, 0))
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_VOLUME, 127))
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_ATTACK, 0))
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_DECAY, _CR2_NOISE_DECAY))
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_SUSTAIN, 0))
-        add(ch, 0, _PRIO_SETUP, _cc(ch, _CR2_CC_RELEASE, _CR2_NOISE_RELEASE))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_RESET, 0))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_VOLUME, 127))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_ATTACK, 0))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_DECAY, _CR2_NOISE_DECAY))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_SUSTAIN, 0))
+        add(ch, 0, _PRIO_SETUP, _cc(ch, CR2_CC_RELEASE, _CR2_NOISE_RELEASE))
     for ev in perc_events:
         on = cfg.time_to_ticks(ev.time)
         note = nearest_note(ev.centroid, cfg) if cr2 else ev.note

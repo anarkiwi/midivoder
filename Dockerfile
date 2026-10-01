@@ -24,5 +24,10 @@ RUN python3 -c "import tomllib; p = tomllib.load(open('pyproject.toml', 'rb'))['
 FROM deps AS test
 COPY midivoder ./midivoder
 COPY tests ./tests
+COPY tools ./tools
 RUN pip install --no-cache-dir --break-system-packages --no-deps -e .
 CMD ["python3", "-m", "pytest", "-n", "auto", "--cov=midivoder", "--cov-report=term-missing", "--cov-fail-under=85"]
+
+FROM test AS eval
+RUN python3 -c "import tomllib; print('\\n'.join(tomllib.load(open('pyproject.toml', 'rb'))['project']['optional-dependencies']['eval']))" > /tmp/eval.txt \
+    && pip install --no-cache-dir --break-system-packages -r /tmp/eval.txt

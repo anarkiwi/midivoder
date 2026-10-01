@@ -18,8 +18,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: black
-        run: docker run --rm midivoder-test black --check midivoder tests
+        run: docker run --rm midivoder-test black --check midivoder tests tools
       - name: pylint
-        run: docker run --rm midivoder-test pylint midivoder tests
+        run: docker run --rm midivoder-test pylint midivoder tests tools
       - name: pytest
         run: docker run --rm midivoder-test

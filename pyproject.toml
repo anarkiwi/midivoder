@@ -24,6 +24,13 @@ test = [
     "pytest-xdist>=3",
     "black>=24",
     "pylint>=3",
+    "tqdm>=4",
+]
+eval = [
+    "faster-whisper>=1.0",
+    "jiwer>=3",
+    "pystoi>=0.4",
+    "tqdm>=4",
 ]
 
 [project.scripts]
@@ -34,6 +41,7 @@ include = ["midivoder*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "fidelity: end-to-end fidelity test requiring fluidsynth + espeak-ng (Docker)",
 ]
