@@ -57,7 +57,9 @@ def midi_tones(path: str, synth: str) -> tuple[list[_Tone], float]:
     t = 0.0
 
     def point(ch: _Channel, tone: _Tone, level: bool = True) -> None:
-        pitch = tone.note + synth_bend_semitones(ch.bend, ch.bend_range, synth)
+        pitch = tone.note + synth_bend_semitones(
+            ch.bend, ch.bend_range, synth, tone.note
+        )
         amp = rendered_level(tone.velocity, ch.volume, tone.note, synth)
         tone.points.append((t, float(pitch), float(amp) if level else 0.0))
 

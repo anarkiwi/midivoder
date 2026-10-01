@@ -49,10 +49,33 @@ def nearest_note(freq: float, cfg: EncodeConfig) -> int:
     return int(np.clip(round(midi_float(freq)), cfg.note_min, cfg.note_ceiling))
 
 
-def bend_value(midf: float, base_note: int, bend_range: float) -> int:
-    """Signed 14-bit pitch-bend (mido range -8192..8191) for `midf` played as `base_note`."""
+def cr2_bend_span(note, bend_range: float, up):
+    """Signed semitones from `note` to CR2's bend target, clamped to 0..CR2_MAX_PITCH."""
+    note = np.asarray(note, dtype=float)
+    target = np.clip(note + np.where(up, bend_range, -bend_range), 0, CR2_MAX_PITCH)
+    return target - note
+
+
+def bend_value(
+    midf: float, base_note: int, bend_range: float, synth: str = "gm"
+) -> int:
+    """Signed 14-bit pitch-bend (mido range -8192..8191) for `midf` played as `base_note`.
+
+    Inverts `synth_bend_semitones`: semitone-linear for GM, period-linear toward the
+    clamped bend target for CR2.
+    """
     semis = midf - base_note
-    return int(np.clip(round(semis / bend_range * 8192.0), -8192, 8191))
+    if synth != "cr2":
+        frac = semis / bend_range
+    else:
+        span = float(cr2_bend_span(base_note, bend_range, semis > 0))
+        frac = (
+            0.0
+            if span == 0
+            else np.sign(semis)
+            * min(1.0, (2.0 ** (-semis / 12.0) - 1.0) / (2.0 ** (-span / 12.0) - 1.0))
+        )
+    return int(np.clip(round(frac * 8192.0), -8192, 8191))
 
 
 def amp_ratio(amp: float, ref: float) -> float:
@@ -98,17 +121,22 @@ def rendered_level(velocity, volume, note, synth: str):
     )
 
 
-def synth_bend_semitones(value, bend_range: float, synth: str):
-    """Pitch offset in semitones that a 14-bit bend `value` produces.
+def synth_bend_semitones(value, bend_range: float, synth: str, note=None):
+    """Pitch offset in semitones that a 14-bit bend `value` produces on `note`.
 
     GM bends linearly in semitones. CR2 interpolates linearly in period between the note
-    and the note `bend_range` semitones away (PitchBender::BendHz).
+    and its bend target `bend_range` semitones away, clamped to 0..CR2_MAX_PITCH
+    (PitchBender::BendHz); `note=None` ignores the clamp.
     """
     frac = np.asarray(value, dtype=float) / 8192.0
     if synth != "cr2":
         return frac * bend_range
-    span = 2.0 ** (-np.sign(frac) * bend_range / 12.0) - 1.0
-    return -12.0 * np.log2(1.0 + np.abs(frac) * span)
+    span = (
+        np.sign(frac) * bend_range
+        if note is None
+        else cr2_bend_span(note, bend_range, frac > 0)
+    )
+    return -12.0 * np.log2(1.0 + np.abs(frac) * (2.0 ** (-span / 12.0) - 1.0))
 
 
 def cr2_release_ms(release_cc: int) -> float:
@@ -249,7 +277,7 @@ def _emit_partial(
                 mido.Message(
                     "pitchwheel",
                     channel=ch,
-                    pitch=bend_value(midf, base_note, cfg.bend_range),
+                    pitch=bend_value(midf, base_note, cfg.bend_range, cfg.synth),
                 ),
             )
             if cc7_amp:
@@ -274,7 +302,7 @@ def _emit_partial(
                 mido.Message(
                     "pitchwheel",
                     channel=ch,
-                    pitch=bend_value(midf, base_note, cfg.bend_range),
+                    pitch=bend_value(midf, base_note, cfg.bend_range, cfg.synth),
                 ),
             )
             if cc7_amp:

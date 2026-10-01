@@ -12,6 +12,7 @@ from midivoder.midi import (
     bend_value,
     midi_float,
     nearest_note,
+    synth_bend_semitones,
 )
 from midivoder.partials import Partial
 
@@ -54,6 +55,48 @@ def test_bend_sign_and_range():
     # Beyond range clamps to the 14-bit limits.
     assert bend_value(80.0, 69, 2.0) == 8191
     assert bend_value(60.0, 69, 2.0) == -8192
+
+
+def _hz(note: float) -> float:
+    return 440.0 * 2.0 ** ((note - 69.0) / 12.0)
+
+
+def _cr2_firmware_pitch(note: int, value: int, bend_range: int) -> float:
+    """PitchBender::BendHz: period interpolated toward note +/- range clamped to 0..96."""
+    target = min(max(note + (bend_range if value > 0 else -bend_range), 0), 96)
+    frac = abs(value) / 8192.0
+    return midi_float(1.0 / ((1.0 - frac) / _hz(note) + frac / _hz(target)))
+
+
+@pytest.mark.parametrize(
+    "note,value,bend_range",
+    [(72, 4096, 12), (72, -4096, 12), (60, 2048, 2), (60, -6000, 2), (95, 4096, 2)],
+)
+def test_cr2_bend_law_matches_firmware(note, value, bend_range):
+    """CR2 bends are period-linear toward a target clamped at its top pitch."""
+    pitch = note + synth_bend_semitones(value, bend_range, "cr2", note)
+    assert pitch == pytest.approx(
+        _cr2_firmware_pitch(note, value, bend_range), abs=1e-9
+    )
+    assert bend_value(pitch, note, bend_range, "cr2") == pytest.approx(value, abs=1)
+
+
+def test_cr2_bend_differs_from_gm_mid_range():
+    """At a wide range the semitone-linear value lands most of a semitone off on CR2."""
+    gm, cr2 = (bend_value(76.0, 72, 12, synth) for synth in ("gm", "cr2"))
+    assert gm == pytest.approx(8192 / 3, abs=1)
+    assert _cr2_firmware_pitch(72, gm, 12) < 75.2
+    assert _cr2_firmware_pitch(72, cr2, 12) == pytest.approx(76.0, abs=0.002)
+
+
+def test_cr2_bend_saturates_and_respects_clamp():
+    """Offsets past the clamped target saturate; a top-pitch note cannot bend up."""
+    assert bend_value(95.9, 95, 2, "cr2") == pytest.approx(
+        8192 * (2 ** (-0.9 / 12) - 1) / (2 ** (-1 / 12) - 1), abs=1
+    )
+    assert bend_value(97.5, 95, 2, "cr2") == 8191
+    assert bend_value(96.5, 96, 2, "cr2") == 0
+    assert synth_bend_semitones(-8192, 2, "cr2", 1) == pytest.approx(-1.0)
 
 
 def test_velocity_laws_and_window(cfg):

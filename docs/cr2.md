@@ -35,6 +35,7 @@ channel-10 pitched noise).
 | Percussion channel | 10 (drum map) | 10 (**pitched noise**, not drums) |
 | Polyphony | per soundfont | 16 oscillators total, shared; detune (CC94/95) halves it |
 | Pitch-bend range | RPN 0,0 | **CC31** (RPN is ignored) |
+| Pitch-bend law | linear in semitones | **linear in period** toward note ± range, target clamped to ≤ 96 |
 | Per-note timbre | soundfont sample | coil pulse train (bright, harmonically rich) |
 | Note range | 0–127 | **≤ 96** (higher note-ons ignored) |
 | Amplitude | SF2: `40·log10(v/127)` dB per velocity | pulse width above `breakoutUs` = `hzScale(note) × v/127 × ADSR × CC7/127`, all linear |
@@ -62,6 +63,9 @@ Implemented in `config.py`, `midi.py`, `percussion.py`, `encoder.py`, `cli.py`:
   is spent on a partial CR2 cannot sound.
 - **Bend range via CC31** instead of RPN. (Without this, midivoder's ±2-semitone pitchwheel
   values would be read against CR2's default ±12 range and barely move the pitch.)
+- **Period-linear bends.** `bend_value` inverts `PitchBender::BendHz`: the bend fraction is
+  `(2^(−s/12) − 1) / (2^(−d/12) − 1)` for an offset of `s` semitones toward a target `d`
+  semitones away (± range, clamped to note 96), so bends near the ceiling stay in tune.
 - **ADSR setup.** Tonal channels use CR2's default instant-attack / full-sustain plus a short
   release so note-offs don't click and there is no long tail (the GM ocarina patch doubled
   render length to ~7 s; CR2 renders track the MIDI length, ~4 s). The noise channel gets a
