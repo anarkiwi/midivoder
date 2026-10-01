@@ -15,6 +15,10 @@ PERCUSSION_CHANNEL = 9
 CR2_MAX_TONAL_INDEX = 7
 # CHIME RED II ignores note-ons above this note (C7, ~2093 Hz) on every channel.
 CR2_MAX_PITCH = 96
+# CHIME RED II firmware (constants.h): CC31 bend-range clamp and the control-loop period
+# (masterClockHz / controlClockRelHz) that advances envelopes.
+CR2_MAX_BEND_RANGE = 12
+CR2_CONTROL_TICK_S = 10.0 / 52631.0
 
 
 @dataclass
