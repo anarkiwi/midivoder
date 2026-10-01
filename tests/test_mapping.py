@@ -35,9 +35,10 @@ def test_octave_is_twelve_semitones(cfg):
 
 
 def test_note_clamped_to_range(cfg):
-    """Out-of-range frequencies clamp to note_min/note_max."""
-    assert nearest_note(20.0, cfg) >= cfg.note_min
-    assert nearest_note(15000.0, cfg) <= cfg.note_max
+    """Out-of-range frequencies clamp to note_min/note_max (95 for cr2)."""
+    assert nearest_note(20.0, cfg) == cfg.note_min
+    assert nearest_note(15000.0, cfg) == cfg.note_max
+    assert nearest_note(15000.0, EncodeConfig(synth="cr2")) == 95
 
 
 def test_bend_zero_when_on_pitch():
@@ -55,12 +56,15 @@ def test_bend_sign_and_range():
     assert bend_value(60.0, 69, 2.0) == -8192
 
 
-def test_velocity_monotonic_and_clamped(cfg):
-    """Louder amplitudes give higher, clamped velocities."""
-    quiet = amp_to_velocity(0.001, 1.0, cfg)
-    loud = amp_to_velocity(1.0, 1.0, cfg)
-    assert cfg.velocity_min <= quiet < loud <= cfg.velocity_max
-    assert loud == cfg.velocity_max
+def test_velocity_laws_and_window(cfg):
+    """GM velocity is 127*sqrt(ratio), CR2 is linear; both clip to the 48 dB window."""
+    cr2 = EncodeConfig(synth="cr2")
+    assert amp_to_velocity(2.0, 1.0, cfg) == amp_to_velocity(1.0, 1.0, cr2) == 127
+    assert amp_to_velocity(0.25, 1.0, cfg) == 64
+    assert amp_to_velocity(0.25, 1.0, cr2) == 32
+    floor = 10.0 ** (-48.0 / 20.0)
+    assert amp_to_velocity(1e-9, 1.0, cfg) == round(127 * np.sqrt(floor))
+    assert amp_to_velocity(1e-9, 1.0, cr2) == 1
 
 
 def _partial(start: float, end: float) -> Partial:

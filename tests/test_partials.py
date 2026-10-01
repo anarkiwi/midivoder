@@ -60,11 +60,11 @@ def test_partial_count_capped_by_channels(sine):
 
 
 def test_noise_routed_to_percussion(noise_burst):
-    """A noise burst produces percussion hits with valid velocities."""
+    """A noise burst produces percussion hits with amplitudes relative to the peak."""
     cfg = EncodeConfig()
     # Silence then a noise burst -> at least one percussion hit, few/no tonal partials.
     sig = np.concatenate([np.zeros(8000), noise_burst(dur=0.2)])
     frames = analyze(sig, cfg)
     perc = extract_percussion(frames, cfg)
     assert perc
-    assert all(0 <= e.velocity <= 127 for e in perc)
+    assert all(0.0 < e.amp <= 1.0 for e in perc)

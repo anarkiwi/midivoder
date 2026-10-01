@@ -13,6 +13,8 @@ PERCUSSION_CHANNEL = 9
 
 # CHIME RED II only listens on MIDI channels 1-8 (tonal, zero-based 0-7) and 10.
 CR2_MAX_TONAL_INDEX = 7
+# CHIME RED II ignores note-ons above this note (C7, ~2093 Hz) on every channel.
+CR2_MAX_PITCH = 96
 
 
 @dataclass
@@ -45,8 +47,6 @@ class EncodeConfig:
     )
     note_min: int = 24  # clamp emitted note numbers
     note_max: int = 108
-    velocity_min: int = 20
-    velocity_max: int = 127
 
     # --- instruments ---
     instrument: str = "auto"  # "auto" or a GM program number as a string
@@ -101,6 +101,23 @@ class EncodeConfig:
                 continue
             channels.append(ch)
         return channels
+
+    @property
+    def note_ceiling(self) -> int:
+        """Highest note number the target synth will sound."""
+        if self.synth != "cr2":
+            return self.note_max
+        # CR2 scales pulse width by 1 - hz(note)/hz(CR2_MAX_PITCH), silencing its top note.
+        return min(self.note_max, CR2_MAX_PITCH - 1)
+
+    @property
+    def partial_fmax(self) -> float:
+        """Upper frequency bound for spectral peaks fed to partial tracking."""
+        if self.synth != "cr2":
+            return self.fmax
+        # Peaks at or above the half-semitone past the ceiling would round to a base note
+        # CR2 cannot sound, so they are never tracked.
+        return min(self.fmax, 440.0 * 2.0 ** ((self.note_ceiling + 0.5 - 69.0) / 12.0))
 
     @property
     def max_partials(self) -> int:

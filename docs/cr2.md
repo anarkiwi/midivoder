@@ -36,7 +36,8 @@ channel-10 pitched noise).
 | Polyphony | per soundfont | 16 oscillators total, shared; detune (CC94/95) halves it |
 | Pitch-bend range | RPN 0,0 | **CC31** (RPN is ignored) |
 | Per-note timbre | soundfont sample | coil pulse train (bright, harmonically rich) |
-| Amplitude | velocity + CC7/CC11 | gate **pulse width** = `velocity × ADSR_level × CC7`, floored at `breakoutUs` |
+| Note range | 0–127 | **≤ 96** (higher note-ons ignored) |
+| Amplitude | SF2: `40·log10(v/127)` dB per velocity | pulse width above `breakoutUs` = `hzScale(note) × v/127 × ADSR × CC7/127`, all linear |
 | ADSR | per-patch | per-channel CCs: **73 attack, 75 decay, 24 sustain, 72 release** (0–127 ⇒ 0–4 s) |
 
 Two facts drive everything below:
@@ -47,7 +48,8 @@ Two facts drive everything below:
 2. **Amplitude is real-time pulse width.** `ModulateChain` (CR2 `CRMidi.cpp`) multiplies the
    pulse width by `pulseUsScale` (velocity), the ADSR `envelope->level`, and `midiChannel->volume`
    (CC7) **on every pulse**. CC7 is therefore a true real-time amplitude control. The whole
-   chain sits above a hard `breakoutUs` floor (the coil's minimum spark on-time).
+   chain sits above a hard `breakoutUs` floor (the coil's minimum spark on-time), and is
+   further scaled by `hzScale(note) = 1 − hz(note)/hz(96)` of the base note (0 at note 96).
 
 ## What `--synth cr2` does today
 
@@ -55,6 +57,9 @@ Implemented in `config.py`, `midi.py`, `percussion.py`, `encoder.py`, `cli.py`:
 
 - **Channel map.** Tonal partials are capped to channels 0–7 (`CR2_MAX_TONAL_INDEX`) plus the
   noise channel 9, matching exactly what CR2 listens on.
+- **Note ceiling.** Notes (tonal and noise) clamp to 95, one below `CR2_MAX_PITCH` = 96 where
+  `hzScale` reaches 0, and spectral peaks at or above `hz(95.5)` are not tracked, so no channel
+  is spent on a partial CR2 cannot sound.
 - **Bend range via CC31** instead of RPN. (Without this, midivoder's ±2-semitone pitchwheel
   values would be read against CR2's default ±12 range and barely move the pitch.)
 - **ADSR setup.** Tonal channels use CR2's default instant-attack / full-sustain plus a short
@@ -63,12 +68,15 @@ Implemented in `config.py`, `midi.py`, `percussion.py`, `encoder.py`, `cli.py`:
   percussive envelope (instant attack, decay to zero sustain, short release).
 - **Fricatives/plosives → pitched noise.** Percussion events carry the spectral `centroid`;
   in cr2 mode the noise note is `nearest_note(centroid)`, so bright sibilants land high and
-  plosives low. (GM mode still uses the GM drum note.)
+  plosives low. (GM mode still uses the GM drum note.) Hit velocity is linear in the hit's
+  amplitude relative to the loudest frame (GM: `127·sqrt(a)`, matching the SF2 curve).
 - **CC7 continuous amplitude track.** Because midivoder gives **one partial per channel for
   its lifetime**, CC7 *is* that partial's amplitude envelope. cr2 mode draws the amplitude
   contour as CC7 at the control rate and triggers notes at full velocity — no amplitude-based
-  retriggering. This removed note churn and clicks and cut the message rate to ~600–720/s
-  (from ~1000+). GM mode is unchanged (amplitude in note-on velocity, retrigger on big jumps).
+  retriggering, which removes note churn and clicks. For amplitude ratio `a` (vs. the loudest
+  partial, floored at −48 dB) on base note `n`, `CC7 = 127·a / hzScale(n)`, clipped to 127,
+  so the coil's linear pulse width reproduces `a`. GM carries `a` in note-on velocity
+  `127·sqrt(a)` and retriggers on big level jumps.
 
 ## Fidelity observed
 
@@ -77,16 +85,15 @@ Reference phrases (espeak) → encode → render → mel cosine distance vs refe
 
 | phrase | gm cos | cr2 cos |
 | --- | --- | --- |
-| mixed | ~0.34 | ~0.68 |
-| plosive | ~0.36 | ~0.68 |
-| fricative | ~0.43 | ~0.68 |
+| mixed | ~0.27 | ~0.69 |
+| plosive | ~0.31 | ~0.68 |
+| fricative | ~0.37 | ~0.71 |
 
 - CR2 scores worse, but this is a **timbre gap, not an encoding bug**: a coil pulse is bright
   and harmonically rich, whereas speech is defined by a few **formant** resonances with
   rolloff. A single pulse oscillator cannot make a formant-shaped (narrowband, peaked)
   spectrum, so vowels read as buzzy.
-- The **CC7 amplitude track did not move this metric** (~0.68 before and after). That is
-  expected: the metric is DTW-aligned and per-frame level-normalized, so it measures
+- The **CC7 amplitude track does not move this metric much**. That is expected: the metric is DTW-aligned and per-frame level-normalized, so it measures
   *spectral-envelope shape* and is largely blind to amplitude-envelope dynamics and click
   removal — exactly what CC7 improves. Judge that change by ear, not by this number.
 
@@ -96,20 +103,27 @@ Reference phrases (espeak) → encode → render → mel cosine distance vs refe
 
 Ordered by fidelity gain per unit of effort.
 
-1. **Formant / FOF oscillator mode (biggest win).** Add a voice mode where each glottal
+1. **Formant / FOF oscillator mode (biggest win,
+   [chime_red2#45](https://github.com/anarkiwi/chime_red2/issues/45)).** Add a voice mode where each glottal
    period (at the note pitch) triggers a short exponentially-decaying ring at a settable
    **formant frequency + bandwidth**. Summing 2–3 of these makes a vowel — how Klatt/FOF
    formant synths and the vocal tract work, and it maps cleanly onto a coil (a damped pulse
    burst at the formant rate, repeated at the pitch rate). This is the change that would
    actually close the speech-timbre gap and move the metric above.
-2. **Expose more tonal channels (cheap).** `maxMidiChannel = 8` but there are 16 oscillators.
+2. **Expose more tonal channels (cheap,
+   [chime_red2#46](https://github.com/anarkiwi/chime_red2/issues/46)).** `maxMidiChannel = 8` but there are 16 oscillators.
    Mapping ~15 tonal channels (keeping 10 for noise) lets midivoder place more partials
    simultaneously = more formant/harmonic detail. Small change to the channel-map array.
-3. **Decouple noise center from bandwidth + HF tilt (cheap).** Channel-10 noise ties center
+3. **Pitch-dependent pulse-width scaling
+   ([chime_red2#47](https://github.com/anarkiwi/chime_red2/issues/47)).** `hzScale` drives
+   output to zero at note 96 and caps what CC7 can compensate near it (CC7 ≤ 127 only reaches
+   `a ≤ hzScale(n)`), so high partials are attenuated or lost. Making the curve configurable
+   or optional would let the encoder use the top octave.
+4. **Decouple noise center from bandwidth + HF tilt (cheap).** Channel-10 noise ties center
    and width together (width = `±bendRange`). Independent center/bandwidth plus a
    high-frequency tilt would let fricatives be distinguished — /s/ (~5–8 kHz, narrow-bright)
    vs /ʃ/ (~2–4 kHz) vs /f/ (flat).
-4. **Companding the amplitude curve, not a new CC (medium).** The `breakoutUs` floor means
+5. **Companding the amplitude curve, not a new CC (medium).** The `breakoutUs` floor means
    soft passages clip to silence or pop regardless of how finely amplitude is drawn. Mapping
    velocity/volume → pulse width through a perceptual/log curve that packs speech's dynamic
    range into the usable band above breakout would improve perceived dynamics more than any
