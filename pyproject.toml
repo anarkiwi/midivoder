@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "midivoder"
 version = "0.1.0"
 description = "Vocode a voice WAV into a multi-channel General MIDI file."
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 dependencies = [
     "numpy>=1.24",
@@ -47,10 +47,10 @@ markers = [
 ]
 
 [tool.black]
-target-version = ["py311", "py312"]
+target-version = ["py312"]
 
 [tool.pylint.main]
-py-version = "3.11"
+py-version = "3.12"
 
 [tool.pylint."messages control"]
 disable = [
